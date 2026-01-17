@@ -348,7 +348,7 @@ def main():
     # Tiny training (so generation looks less random)
     # 开始训练
     # 训练 200 步
-    steps = 200
+    steps = 400
     # 设置模型到训练模式
     model.train()
     # 训练循环
