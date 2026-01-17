@@ -314,6 +314,26 @@ def main():
     print("\n[generate after train]")
     print(decode(out[0].tolist(), itos))
 
+    # --------
+    # 5) Save model checkpoint
+    # --------
+    from pathlib import Path
+    save_dir = Path("runs/minimal_gpt")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = save_dir / "model.pt"
+
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "vocab_size": vocab_size,
+        "block_size": block_size,
+        "n_layer": n_layer,
+        "n_head": n_head,
+        "n_embd": n_embd,
+        "stoi": stoi,
+        "itos": itos,
+    }, checkpoint_path)
+    print(f"\n[checkpoint] saved to {checkpoint_path}")
+
 
 if __name__ == "__main__":
     main()
