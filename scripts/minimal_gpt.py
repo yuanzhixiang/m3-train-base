@@ -2,6 +2,7 @@
 # A minimal GPT that can: forward, generate, do one backward step.
 # Dependency: pip install torch
 
+## 导入依赖，只依赖 torch 和数学核心库
 import math
 import torch
 import torch.nn as nn
@@ -12,6 +13,8 @@ import torch.nn.functional as F
 # Building blocks
 # -----------------------------
 
+## 因果自注意力机制
+## 之所以叫做因果，因为 token 只能依赖过去和当前的信息，不能依赖未来信息，符合因果关系
 class CausalSelfAttention(nn.Module):
     def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float = 0.0):
         super().__init__()
@@ -61,7 +64,7 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_dropout(y)
         return y
 
-
+## 多层感知机（Multi_Layer Perceptron），也叫做前馈神经网络（Feed-Forward Network）
 class MLP(nn.Module):
     def __init__(self, n_embd: int, dropout: float = 0.0):
         super().__init__()
@@ -76,7 +79,7 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
-
+## 一个完整的 Transformer 块，组合注意力层和 MLP 层
 class Block(nn.Module):
     def __init__(self, n_embd: int, n_head: int, block_size: int, dropout: float = 0.0):
         super().__init__()
@@ -91,6 +94,7 @@ class Block(nn.Module):
         return x
 
 
+## 完整的 GPT 模型，这是最顶层的类
 class GPT(nn.Module):
     def __init__(
         self,
@@ -198,12 +202,16 @@ def get_batch(data: torch.Tensor, block_size: int, batch_size: int, device: torc
 # -----------------------------
 
 def main():
+    # 设置随机种子为 1337，让程序每次运行的随机结果都一样，方案调试和复现
+    # 1337 是一个常见的彩蛋数字
     torch.manual_seed(1337)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 选择计算设备，优先使用 GPU（如果可用），否则使用 CPU
+    device = torch.device("mps")
     print(f"[device] {device}")
 
     # A tiny corpus (keep vocab small; repeat to get enough training data)
+    # 准备训练数据，数据量较小，所以最后 * 200 来扩充数据量
     corpus = (
         "最小GPT从零到一。\n"
         "我们先让模型学会预测下一个字符。\n"
@@ -211,20 +219,36 @@ def main():
         "从forward到generate再到backward，一次打通。\n"
     ) * 200
 
+    # 构建字符词汇表
+    # stoi: string to integer 是字符到数字的映射
+    # 例如: {'最': 0, '小': 1, 'G': 2, ...}
+    # itos: integer to string 是数字到字符的映射
+    # 例如: {0: '最', 1: '小', 2: 'G', ...}
+    # 这样就可以把文本转换成模型能处理的数字
     stoi, itos = build_char_vocab(corpus)
+    # 计算词汇表大小
     vocab_size = len(stoi)
     print(f"[vocab] size={vocab_size}")
 
+    # 将文本编码成数字张量
     data = torch.tensor(encode(corpus, stoi), dtype=torch.long)
 
     # Hyperparams: deliberately tiny so it runs anywhere
+    # 设置模型超参数
     block_size = 64
+    # 批次大小，一次处理多少样本，更大的 batch 更稳定但需要更多内存
     batch_size = 16
+    # Transformer 层数
     n_layer = 2
+    # 注意力头数量
     n_head = 2
+    # 嵌入维度
     n_embd = 64
+    # Dropout 概率
+    # Dropout 是一种防止过拟合的技术
     dropout = 0.0
 
+    # 创建模型
     model = GPT(
         vocab_size=vocab_size,
         block_size=block_size,
@@ -234,27 +258,38 @@ def main():
         dropout=dropout,
     ).to(device)
 
+    # 计算模型的总参数量
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] params={n_params/1e6:.3f}M")
 
     # --------
     # 1) Forward test
     # --------
+    # 设置模型为训练模式
     model.train()
+    # 获取一个训练批次
     xb, yb = get_batch(data, block_size, batch_size, device)
+    # 执行前向传播
     logits, loss = model(xb, yb)
+    # 打印前向传播结果
     print(f"[forward] logits={tuple(logits.shape)} loss={loss.item():.4f}")
 
     # --------
     # 2) Causality test (mask correctness)
     #    Change the last token and see whether earlier-position logits change.
     # --------
+    # 禁用梯度计算
     with torch.no_grad():
+        # 取第一个样本的副本
         test = xb[:1, :].clone()
+        # 第一次前向传播
         logits1, _ = model(test)
+        # 创建 text 的另一个副本
         test2 = test.clone()
+        # 修改最后一个 token
         # Flip the last token to a different id
         test2[0, -1] = (test2[0, -1] + 1) % vocab_size
+        # 第二次前向传播
         logits2, _ = model(test2)
 
         # Compare logits for positions [0 .. T-2]
@@ -264,13 +299,18 @@ def main():
     # --------
     # 3) One backward step
     # --------
+    # 创建优化器
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
+    # 清空梯度
     optimizer.zero_grad(set_to_none=True)
+    # 前向传播计算损失
     logits, loss = model(xb, yb)
+    # 反向传播计算梯度
     loss.backward()
 
     # Grad norm (sanity)
+    # 计算梯度的 L2 范数
     total_norm = 0.0
     for p in model.parameters():
         if p.grad is not None:
@@ -278,45 +318,69 @@ def main():
     total_norm = total_norm ** 0.5
     print(f"[backward] grad_norm={total_norm:.4f}")
 
+    # 更多参数
     optimizer.step()
 
     # Recompute loss on same batch just to show it runs end-to-end
+    # 重新计算更新后的损失
     with torch.no_grad():
         _, loss2 = model(xb, yb)
+    # 对比更新前后的损失
     print(f"[update] loss_before={loss.item():.4f} loss_after={loss2.item():.4f}")
 
     # --------
     # 4) Generate before/after a tiny bit of training
     # --------
+    # 生成测试
+    # 设置提示词
     prompt = "最小GPT"
+    # 编码提示词
     idx = torch.tensor([encode(prompt, stoi)], dtype=torch.long, device=device)
 
+    # 训练前生成文本
     with torch.no_grad():
         out = model.generate(idx, max_new_tokens=80, temperature=1.0, top_k=20)
+
+    # 打印训练前生成的文本
     print("\n[generate before train]")
     print(decode(out[0].tolist(), itos))
 
     # Tiny training (so generation looks less random)
+    # 开始训练
+    # 训练 200 步
     steps = 200
+    # 设置模型到训练模式
     model.train()
+    # 训练循环
     for step in range(steps):
+        # 每步随机采样一个新批次
         xb, yb = get_batch(data, block_size, batch_size, device)
+        # 前向传播
         _, loss = model(xb, yb)
+        # 清空梯度
         optimizer.zero_grad(set_to_none=True)
+        # 反向传播
         loss.backward()
+        # 梯度裁剪
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # 更新参数
         optimizer.step()
+        # 每 50 步打印一次损失
         if (step + 1) % 50 == 0:
             print(f"[train] step {step+1}/{steps} loss={loss.item():.4f}")
 
+    # 训练后生成文本
     with torch.no_grad():
         out = model.generate(idx, max_new_tokens=120, temperature=0.9, top_k=30)
+
+    # 打印训练后生成的文本
     print("\n[generate after train]")
     print(decode(out[0].tolist(), itos))
 
     # --------
     # 5) Save model checkpoint
     # --------
+    # 保存模型检查点
     from pathlib import Path
     save_dir = Path("runs/minimal_gpt")
     save_dir.mkdir(parents=True, exist_ok=True)
